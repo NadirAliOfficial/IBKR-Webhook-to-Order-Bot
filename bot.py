@@ -1,158 +1,109 @@
-
 import logging
-import traceback
-
+import argparse
 from flask import Flask, request, jsonify
-from ib_insync import IB, Forex, MarketOrder, LimitOrder, util
+from ib_insync import IB, Forex, Stock, MarketOrder, LimitOrder, util
 
-# Start ib_insync asyncio loop
-util.startLoop()
-
-# ——— Configuration ———
-IB_HOST      = '127.0.0.1'   # IBKR TWS/Gateway host
-IB_PORT      = 7497          # API port (4001=paper, 7497=live)
-IB_CLIENT_ID = 1             # unique client ID
-FLASK_PORT   = 5001          # Flask server port
-
-# ——— Logging Setup ———
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+# Setup logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ——— IBKR Connection ———
-ib = IB()
-ib.connect(IB_HOST, IB_PORT, clientId=IB_CLIENT_ID)
-logger.info(f"Connected to IBKR at {IB_HOST}:{IB_PORT} (client {IB_CLIENT_ID})")
+# Main entrypoint
+def main():
+    parser = argparse.ArgumentParser(description='IBKR Webhook-to-Order Bot')
+    # Flask options
+    parser.add_argument('--flask-host', default='0.0.0.0', help='Flask host')
+    parser.add_argument('--flask-port', type=int, default=5000, help='Flask port')
+    # IBKR connection options (TWS defaults)
+    parser.add_argument('--ib-host', default='127.0.0.1', help='IB host')
+    parser.add_argument('--ib-port', type=int, default=7497, help='IB port (7497 for TWS)')
+    parser.add_argument('--ib-client-id', type=int, default=1, help='IB client ID')
+    args = parser.parse_args()
 
-# Track open TP orders for cancellation
-outstanding_tps = {}
+    # Initialize Flask and IB
+    app = Flask(__name__)
+    ib = IB()
 
-# ——— Helper Functions ———
-def qualify_forex(symbol: str):
-    """
-    Build and qualify a Forex contract for 'EURUSD'-style symbols.
-    """
-    logger.info(f"Qualifying Forex contract for {symbol}")
-    if len(symbol) != 6:
-        raise ValueError(f"Invalid Forex symbol: {symbol}")
+    # Start asyncio event loop in background thread
+    util.startLoop()
 
-    base = symbol[:3]
-    quote = symbol[3:]
+    # Connect to IBKR
+    def connect_ibkr():
+        if not ib.isConnected():
+            logger.info(f'Connecting to IB at {args.ib_host}:{args.ib_port}, clientId={args.ib_client_id}')
+            ib.connect(args.ib_host, args.ib_port, clientId=args.ib_client_id)
+    connect_ibkr()
 
-    from ib_insync import Contract
-    contract = Contract()
-    contract.symbol = base
-    contract.secType = 'CASH'
-    contract.exchange = 'IDEALPRO'
-    contract.currency = quote
+    # Helpers
+    def get_position(symbol: str):
+        norm = symbol.replace('/', '').upper()
+        for pos in ib.positions():
+            if pos.contract.symbol == norm:
+                return pos
+        return None
 
-    qualified = ib.qualifyContracts(contract)
+    def open_position(symbol: str, side: str, quantity: float, tp=None):
+        connect_ibkr()
+        sym = symbol.replace('/', '').upper()
+        contract = Forex(sym) if '/' in symbol else Stock(sym)
+        # Reverse existing if opposite
+        pos = get_position(symbol)
+        if pos and pos.position != 0:
+            curr = 'buy' if pos.position > 0 else 'sell'
+            if curr == side:
+                logger.info(f'Already {curr} {sym}; skipping')
+                return
+            logger.info(f'Reversing {sym}')
+            ib.placeOrder(pos.contract, MarketOrder('SELL' if pos.position > 0 else 'BUY', abs(pos.position)))
+            ib.sleep(1)
+        # Place entry
+        action = 'BUY' if side == 'buy' else 'SELL'
+        ib.placeOrder(contract, MarketOrder(action, quantity))
+        ib.sleep(1)
+        logger.info(f'Placed {action} {quantity} {sym}')
+        # Place TP limit
+        if tp is not None:
+            price = float(tp)
+            exit_act = 'SELL' if side == 'buy' else 'BUY'
+            ib.placeOrder(contract, LimitOrder(exit_act, quantity, price))
+            logger.info(f'Placed TP limit at {price} {sym}')
+        ib.sleep(1)
 
-    if not qualified:
-        logger.warning(f"IDEALPRO failed for {symbol}, trying SMART")
-        contract.exchange = 'SMART'
-        qualified = ib.qualifyContracts(contract)
+    def close_position(symbol: str):
+        connect_ibkr()
+        sym = symbol.replace('/', '').upper()
+        pos = get_position(symbol)
+        if not pos or pos.position == 0:
+            logger.info(f'No open pos on {sym}')
+            return
+        act = 'SELL' if pos.position > 0 else 'BUY'
+        ib.placeOrder(pos.contract, MarketOrder(act, abs(pos.position)))
+        ib.sleep(1)
+        logger.info(f'Closed {sym}')
 
-    if not qualified:
-        raise RuntimeError(f"Could not qualify Forex contract for {symbol}")
+    # Webhook endpoint
+    @app.route('/webhook', methods=['POST'])
+    def webhook():
+        data = request.get_json(force=True)
+        logger.info(f'Webhook received: {data}')
+        symbol = data.get('symbol', '')
+        action = data.get('action')
+        side = data.get('side', '').lower()
+        qty = data.get('quantity', 0)
+        tp = data.get('tp')
+        try:
+            if action == 'open':
+                open_position(symbol, side, qty, tp)
+            elif action == 'close':
+                close_position(symbol)
+            else:
+                logger.warning(f'Unknown action: {action}')
+        except Exception as e:
+            logger.error(f'Error processing webhook: {e}', exc_info=True)
+            return jsonify({'status': 'error', 'msg': str(e)}), 500
+        return jsonify({'status': 'success'}), 200
 
-    logger.info(f"Qualified {symbol} on exchange {qualified[0].exchange}")
-    return qualified[0]
-
-
-
-
-def get_position(symbol: str) -> float:
-    """
-    Return current open position size for given Forex symbol.
-    """
-    for pos in ib.positions():
-        if pos.contract.symbol == symbol:
-            return pos.position
-    return 0.0
-
-
-def close_position(symbol: str):
-    """
-    Close any open position for this symbol and cancel its TP.
-    """
-    size = get_position(symbol)
-    if size == 0.0:
-        logger.info(f"No position to close for {symbol}")
-        return
-    contract = qualify_forex(symbol)
-    side = 'SELL' if size > 0 else 'BUY'
-    ib.placeOrder(contract, MarketOrder(side, abs(size)))
-    logger.info(f"Closed {symbol}: {side} {abs(size)}")
-    tp = outstanding_tps.pop(symbol, None)
-    if tp:
-        ib.cancelOrder(tp)
-        logger.info(f"Canceled TP for {symbol}")
-
-
-def open_position(symbol: str, side: str, qty: float, tp: float = None):
-    """
-    Open or reverse a Forex position:
-      1. Reverse opposite side if open
-      2. Avoid pyramiding
-      3. Place market order + optional TP limit
-    """
-    current = get_position(symbol)
-    want_long = side.lower() == 'buy'
-    contract = qualify_forex(symbol)
-
-    # Reverse if opposite side exists
-    if current != 0.0 and ((current > 0) != want_long):
-        logger.info(f"Reversing existing position for {symbol}")
-        close_position(symbol)
-
-    # Refresh position and avoid pyramiding
-    current = get_position(symbol)
-    if (want_long and current > 0) or (not want_long and current < 0):
-        logger.info(f"Skipping pyramiding for {symbol} (current={current})")
-        return
-
-    # Market order
-    action = 'BUY' if want_long else 'SELL'
-    ib.placeOrder(contract, MarketOrder(action, qty))
-    logger.info(f"Placed market {action} {qty} {symbol}")
-
-    # Take-profit limit
-    if tp is not None:
-        tp_action = 'SELL' if want_long else 'BUY'
-        tp_order = ib.placeOrder(contract, LimitOrder(tp_action, qty, tp))
-        outstanding_tps[symbol] = tp_order
-        logger.info(f"Set TP for {symbol}: {tp_action} {qty}@{tp}")
-
-# ——— Flask App ———
-app = Flask(__name__)
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    data = request.get_json(force=True)
-    logger.info(f"Webhook received: {data}")
-    try:
-        symbol   = data['symbol']
-        action   = data['action']
-        side     = data['side']
-        qty      = float(data.get('quantity', 1))
-        tp_val   = float(data['tp']) if data.get('tp') else None
-
-        if action == 'open':
-            open_position(symbol, side, qty, tp_val)
-        elif action == 'close':
-            close_position(symbol)
-        else:
-            raise ValueError(f"Unknown action: {action}")
-
-        return jsonify(status='ok', data=data), 200
-    except Exception:
-        tb = traceback.format_exc()
-        logger.error(tb)
-        return jsonify(status='error', error=tb), 500
+    # Start Flask server
+    app.run(host=args.flask_host, port=args.flask_port)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=FLASK_PORT)
+    main()
