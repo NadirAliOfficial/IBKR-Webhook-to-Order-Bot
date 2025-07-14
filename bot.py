@@ -45,6 +45,7 @@ def main():
         connect_ibkr()
         sym = symbol.replace('/', '').upper()
         contract = Forex(sym) if '/' in symbol else Stock(sym)
+
         # Reverse existing if opposite
         pos = get_position(symbol)
         if pos and pos.position != 0:
@@ -55,17 +56,29 @@ def main():
             logger.info(f'Reversing {sym}')
             ib.placeOrder(pos.contract, MarketOrder('SELL' if pos.position > 0 else 'BUY', abs(pos.position)))
             ib.sleep(1)
+
         # Place entry
         action = 'BUY' if side == 'buy' else 'SELL'
         ib.placeOrder(contract, MarketOrder(action, quantity))
         ib.sleep(1)
         logger.info(f'Placed {action} {quantity} {sym}')
-        # Place TP limit
+
+        # Place TP limit if not already exists
         if tp is not None:
-            price = float(tp)
-            exit_act = 'SELL' if side == 'buy' else 'BUY'
-            ib.placeOrder(contract, LimitOrder(exit_act, quantity, price))
-            logger.info(f'Placed TP limit at {price} {sym}')
+            open_orders = ib.openOrders()
+            existing_tp = any(
+                o.contract.symbol == sym and isinstance(o.order, LimitOrder) and
+                ((side == 'buy' and o.order.action == 'SELL') or
+                (side == 'sell' and o.order.action == 'BUY'))
+                for o in open_orders
+            )
+            if not existing_tp:
+                price = float(tp)
+                exit_act = 'SELL' if side == 'buy' else 'BUY'
+                ib.placeOrder(contract, LimitOrder(exit_act, quantity, price))
+                logger.info(f'Placed TP limit at {price} {sym}')
+            else:
+                logger.info(f'TP already exists for {sym}, skipping TP placement.')
         ib.sleep(1)
 
     def close_position(symbol: str):
