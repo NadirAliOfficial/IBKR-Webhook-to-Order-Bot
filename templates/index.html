@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- This meta tag will refresh the page every 60 seconds -->
+    <meta http-equiv="refresh" content="60">
+    <title>IBKR Dashboard & Trade Log</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; background-color: #f4f7f6; color: #333; }
+        .header { background-color: #00529B; color: white; padding: 20px; text-align: center; }
+        .container { display: flex; flex-wrap: wrap; padding: 10px; }
+        .column { flex: 1; min-width: 400px; margin: 10px; padding: 20px; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1, h2 { color: #003366; border-bottom: 2px solid #e0e0e0; padding-bottom: 10px; }
+        table { border-collapse: collapse; width: 100%; margin-top: 15px; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #f2f2f2; font-weight: 600; }
+        .status-bar { padding: 1em; background-color: #e7f3fe; border-left: 6px solid #2196F3; margin-bottom: 1.5em; }
+        .error-log { color: #D8000C; background-color: #FFD2D2; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>IBKR Dashboard & Trade Log</h1>
+    </div>
+
+    <div class="status-bar">
+        <strong>Status:</strong> {{ dashboard_data.status }}
+    </div>
+
+    <div class="container">
+        <!-- Column for Account Status -->
+        <div class="column">
+            <h2>Account Summary</h2>
+            {% if dashboard_data.account %}
+                <table>
+                    {% for key, value in dashboard_data.account.items() %}
+                        <tr>
+                            <th>{{ key }}</th>
+                            <td>{{ value }}</td>
+                        </tr>
+                    {% endfor %}
+                </table>
+            {% else %}
+                <p>No account data available yet. Waiting for refresh...</p>
+            {% endif %}
+
+            <h2>Open Positions</h2>
+            {% if dashboard_data.positions %}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Position</th>
+                            <th>Average Cost</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for p in dashboard_data.positions %}
+                            <tr>
+                                <td>{{ p.symbol }}</td>
+                                <td>{{ p.position }}</td>
+                                <td>${{ "%.2f"|format(p.avgCost) }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <p>No open positions.</p>
+            {% endif %}
+        </div>
+
+        <!-- Column for Trade Log -->
+        <div class="column">
+            <h2>Trade Execution Log</h2>
+            {% if trade_log %}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Symbol</th>
+                            <th>Action</th>
+                            <th>Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for entry in trade_log | reverse %}
+                            <tr class="{% if entry.action == 'ERROR' %}error-log{% endif %}">
+                                <td>{{ entry.timestamp }}</td>
+                                <td>{{ entry.symbol }}</td>
+                                <td>{{ entry.action }}</td>
+                                <td><pre style="margin: 0; white-space: pre-wrap; word-break: break-all;">{{ entry.details }}</pre></td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <p>No trades have been executed yet.</p>
+            {% endif %}
+        </div>
+    </div>
+
+</body>
+</html>

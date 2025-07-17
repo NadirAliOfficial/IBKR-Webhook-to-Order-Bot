@@ -1,0 +1,10 @@
+# Flask is the web server framework for the dashboard and webhook.
+flask
+
+# ib_insync is the core library for communicating with Interactive Brokers.
+ib_insync
+
+# argparse is used to handle command-line arguments like port numbers.
+# Note: argparse is part of the standard Python library since 3.2,
+# but including it here ensures compatibility and makes dependencies explicit.
+argparse

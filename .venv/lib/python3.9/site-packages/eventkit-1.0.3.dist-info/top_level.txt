@@ -1,2 +1,0 @@
-eventkit
-tests
