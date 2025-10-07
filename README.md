@@ -142,4 +142,3 @@ __pycache__/
 
 MIT License (Free to use, modify, and distribute)
 <!-- updated: 2026-05-31 -->
-
