@@ -93,7 +93,7 @@ def get_last_closed_trade(symbol):
 # --- 3. Global Data & Main App ---
 dashboard_data = {'status': 'Initializing...', 'account': {}, 'positions': []}
 # (The old trade_log list is no longer needed, but we keep it for simple UI logging)
-trade_log_ui = [] 
+trade_log_ui = []
 
 def main():
     # ... (Parser and args setup remains the same) ...
@@ -160,7 +160,7 @@ def main():
         market_order_trade = ib.placeOrder(contract, MarketOrder(action, quantity))
         entry_order_id = market_order_trade.order.orderId
         trade_log_ui.append({'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'symbol': sym, 'action': f"Market Order ({action})", 'details': repr(market_order_trade)})
-        
+
        # Place TP and get its ID
         tp_id = None
         if tp:
@@ -235,7 +235,7 @@ def main():
     @app.route('/')
     def index():
         return render_template('index.html', dashboard_data=dashboard_data, trade_log=trade_log_ui)
-    
+
     @app.route('/webhook', methods=['POST'])
     def webhook():
         data = request.get_json(force=True)
@@ -253,7 +253,7 @@ def main():
     def onConnected(*args):
         logger.info("IBKR Connection successful.")
         asyncio.create_task(update_dashboard_data())
-    
+
     ib.execDetailsEvent += onExecDetails
     ib.connectedEvent += onConnected
     util.startLoop()
