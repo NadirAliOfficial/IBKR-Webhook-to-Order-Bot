@@ -1,5 +1,7 @@
 import logging
 import argparse
+import os
+import secrets
 import sqlite3
 from flask import Flask, request, jsonify, render_template
 from ib_insync import IB, Forex, Stock, MarketOrder, LimitOrder, util
@@ -238,6 +240,14 @@ def main():
 
     @app.route('/webhook', methods=['POST'])
     def webhook():
+        # Require a shared secret so an unauthenticated caller cannot submit
+        # trade orders. Fail closed if the operator has not configured one.
+        expected = os.getenv('WEBHOOK_SECRET', '')
+        provided = request.headers.get('X-Webhook-Token', '')
+        if not expected or not secrets.compare_digest(provided, expected):
+            logger.warning('Rejected unauthenticated webhook request')
+            return jsonify({'status': 'error', 'msg': 'unauthorized'}), 401
+
         data = request.get_json(force=True)
         try:
             action = data.get('action')
